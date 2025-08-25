@@ -7,7 +7,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest } from '@/lib/queryClient';
 import type { Bot } from '@shared/schema';
-import customVideo from '@assets/20240216_143627-CINEMATIC_1756127896143.mp4';
+// Video import removed for production deployment
 
 interface BotStats {
   totalBots: number;
@@ -135,15 +135,10 @@ export default function Dashboard() {
         {/* Header */}
         <div className="mb-8 text-center animate-fade-in">
           <div className="inline-block mb-4">
-            <div className="w-16 h-16 rounded-full overflow-hidden bg-gradient-to-r from-purple-600 to-blue-600 p-0.5 shadow-lg">
-              <video
-                src={customVideo}
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="w-full h-full object-cover rounded-full"
-              />
+            <div className="w-16 h-16 rounded-full bg-gradient-to-r from-purple-600 to-blue-600 p-0.5 shadow-lg flex items-center justify-center">
+              <div className="w-full h-full bg-gradient-to-br from-slate-800 to-slate-900 rounded-full flex items-center justify-center">
+                <i className="fas fa-robot text-purple-400 text-2xl"></i>
+              </div>
             </div>
           </div>
           <h1 className="text-3xl sm:text-4xl font-bold text-slate-100 mb-2 bg-gradient-to-r from-white via-blue-100 to-purple-100 bg-clip-text text-transparent drop-shadow-lg">
