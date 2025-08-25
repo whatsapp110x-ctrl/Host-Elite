@@ -2,20 +2,25 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy package files
+# Install only production dependencies first
 COPY package*.json ./
+RUN npm ci --only=production
 
-# Install dependencies (uses npm install, not npm ci)
-RUN npm install
-
-# Copy the rest of the code
+# Copy source code
 COPY . .
 
 # Build the application
 RUN npm run build
 
-# Expose the port
+# Remove node_modules and reinstall only production deps to save memory
+RUN rm -rf node_modules && npm ci --only=production
+
+# Expose port
 EXPOSE 5000
 
+# Set memory limit and optimize Node.js for production
+ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=400"
+
 # Start the application
-CMD ["npm", "start"]
+CMD ["node", "dist/index.js"]
