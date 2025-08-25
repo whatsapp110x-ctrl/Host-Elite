@@ -1,10 +1,14 @@
+# Use Node.js official image
 FROM node:18-alpine
 
+# Set working directory
 WORKDIR /app
 
-# Install only production dependencies first
+# Copy package files
 COPY package*.json ./
-RUN npm ci --only=production
+
+# Install all dependencies (including devDependencies for build)
+RUN npm ci
 
 # Copy source code
 COPY . .
@@ -12,15 +16,18 @@ COPY . .
 # Build the application
 RUN npm run build
 
-# Remove node_modules and reinstall only production deps to save memory
-RUN rm -rf node_modules && npm ci --only=production
+# Remove devDependencies to reduce image size
+RUN npm prune --production
+
+# Create directories for bot files
+RUN mkdir -p bots deployed_bots
 
 # Expose port
 EXPOSE 5000
 
-# Set memory limit and optimize Node.js for production
+# Set production environment and memory limit
 ENV NODE_ENV=production
 ENV NODE_OPTIONS="--max-old-space-size=400"
 
-# Start the application
+# Start the application directly with node for better memory efficiency
 CMD ["node", "dist/index.js"]
