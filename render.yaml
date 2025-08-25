@@ -3,10 +3,12 @@ services:
     name: bot-hosting-platform
     env: node
     plan: free
-    buildCommand: npm install && npm run build
+    region: oregon
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
-    domains:
-      - "*"
+      - key: PORT
+        value: 10000
+    healthCheckPath: /api/health
