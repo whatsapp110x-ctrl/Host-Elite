@@ -7,37 +7,30 @@ RUN apk add --no-cache git
 # Set working directory
 WORKDIR /app
 
-# Set production environment
-ENV NODE_ENV=production
-
-# Copy package files
+# Copy package files first
 COPY package*.json ./
 
-# Install ALL dependencies (including dev dependencies needed for build)
+# Install dependencies in development mode for build
 RUN npm ci
 
-# Copy configuration files
-COPY vite.config.ts tsconfig.json tailwind.config.ts postcss.config.js components.json drizzle.config.ts ./
+# Copy all files 
+COPY . .
 
-# Copy source directories
-COPY client/ ./client/
-COPY server/ ./server/
-COPY shared/ ./shared/
-COPY bots/ ./bots/
-COPY deployed_bots/ ./deployed_bots/
-COPY attached_assets/ ./attached_assets/
+# Create required directories
+RUN mkdir -p attached_assets bots deployed_bots dist
 
-# Build the application using npx to ensure dependencies are found
-RUN npx vite build && npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist
+# Set NODE_ENV for build
+ENV NODE_ENV=development
 
-# Verify build output
-RUN ls -la dist/ && ls -la dist/public/ && echo "Build verification complete"
+# Build the frontend and backend separately
+RUN cd client && npx vite build
+RUN npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist
 
-# Create additional required directories
-RUN mkdir -p bots deployed_bots
+# Set production environment for runtime
+ENV NODE_ENV=production
 
-# Expose port (Render will set PORT environment variable)
+# Expose port
 EXPOSE 5000
 
-# Start the application with explicit production mode
-CMD ["sh", "-c", "NODE_ENV=production npm start"]
+# Start the application
+CMD ["node", "dist/index.js"]
