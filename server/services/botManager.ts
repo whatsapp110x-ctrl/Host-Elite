@@ -1,28 +1,27 @@
-import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import { ChildProcess, spawn } from 'child_process';
 import { storage } from '../storage';
 import { fileManager } from './fileManager';
-import type { Bot } from '@shared/schema';
 import simpleGit from 'simple-git';
+import { nanoid } from 'nanoid';
 import path from 'path';
 import fs from 'fs/promises';
 
 interface BotProcess {
-  bot: Bot;
+  bot: any;
   process: ChildProcess;
   logs: string[];
   startTime: Date;
-  restartCount?: number;
-  lastHealthCheck?: Date;
-  healthStatus?: 'healthy' | 'unhealthy' | 'unknown';
-  isDockerContainer?: boolean;
+  restartCount: number;
+  healthStatus: string;
+  isDockerContainer: boolean;
   containerName?: string;
 }
 
 export class BotManager extends EventEmitter {
   private activeProcesses = new Map<string, BotProcess>();
   private logListeners = new Map<string, Set<(log: string) => void>>();
-  private deploymentLogs = new Map<string, string[]>(); // Store deployment logs
+  private deploymentLogs = new Map<string, string[]>();
 
   async deployBot(botId: string, zipBuffer: Buffer): Promise<void> {
     return this.deployBotFromZip(botId, zipBuffer);
@@ -36,7 +35,6 @@ export class BotManager extends EventEmitter {
     const bot = await storage.getBot(botId);
     if (!bot) throw new Error('Bot not found');
 
-    // Initialize deployment logs for this bot
     this.deploymentLogs.set(botId, []);
     const addDeploymentLog = (message: string) => {
       const log = `[${new Date().toISOString()}] ${message}`;
@@ -48,16 +46,13 @@ export class BotManager extends EventEmitter {
     };
 
     try {
-      // Update status to deploying
       await storage.updateBot(botId, { status: 'deploying' });
       this.emit('botStatusChanged', { botId, status: 'deploying' });
       addDeploymentLog('Starting deployment...');
 
-      // Extract ZIP file
       addDeploymentLog('Extracting ZIP file...');
       const { botDir, envVars: zipEnvVars } = await fileManager.extractZipFile(zipBuffer, bot.name);
       
-      // Parse additional .env file if provided
       let additionalEnvVars: Record<string, string> = {};
       if (additionalEnvBuffer) {
         addDeploymentLog('Processing additional .env file...');
@@ -66,11 +61,9 @@ export class BotManager extends EventEmitter {
         addDeploymentLog(`Additional .env file contains ${Object.keys(additionalEnvVars).length} variables`);
       }
       
-      // Merge environment variables (additional overrides ZIP)
       const mergedEnvVars = fileManager.mergeEnvVars(zipEnvVars, additionalEnvVars);
-      
-      // Store merged environment variables
       const envVarsJson = Object.keys(mergedEnvVars).length > 0 ? JSON.stringify(mergedEnvVars) : null;
+      
       await storage.updateBot(botId, { 
         filePath: botDir,
         environmentVars: envVarsJson
@@ -79,45 +72,26 @@ export class BotManager extends EventEmitter {
       addDeploymentLog(`Files extracted to: ${botDir}`);
       if (Object.keys(mergedEnvVars).length > 0) {
         addDeploymentLog(`Total environment variables loaded: ${Object.keys(mergedEnvVars).length}`);
-        addDeploymentLog(`Environment variables: ${Object.keys(mergedEnvVars).join(', ')}`);
-        if (Object.keys(additionalEnvVars).length > 0) {
-          addDeploymentLog(`Additional .env file overrode ${Object.keys(additionalEnvVars).length} variables`);
-        }
       }
 
-      // Handle build command - skip pip installs in Replit environment
+      // FIXED: Actually run build commands
       if (bot.buildCommand) {
         addDeploymentLog(`Build command specified: ${bot.buildCommand}`);
         
-        // Check if it's a pip install command
-        if (bot.buildCommand.includes('pip install') || bot.buildCommand.includes('requirements.txt')) {
-          const fs = await import('fs/promises');
-          const path = await import('path');
-          const requirementsPath = path.join(botDir, 'requirements.txt');
+        try {
+          let enhancedBuildCommand = bot.buildCommand.replace(/\bpython\b/g, 'python3');
+          enhancedBuildCommand = enhancedBuildCommand.replace(/\bpip\b/g, 'python3 -m pip');
           
-          try {
-            await fs.access(requirementsPath);
-            addDeploymentLog('Found requirements.txt file');
-            addDeploymentLog('Python packages are pre-installed in Replit environment');
-            addDeploymentLog('Skipping pip install to avoid permission issues');
-            addDeploymentLog('Most common packages (pyrogram, flask, aiohttp, etc.) are available');
-          } catch (error) {
-            addDeploymentLog('No requirements.txt file found');
-          }
-          addDeploymentLog('Dependencies check completed - using pre-installed packages');
-        } else {
-          // Run non-pip build commands normally
-          try {
-            await this.runCommandWithLogs(bot.buildCommand, botDir, addDeploymentLog);
-            addDeploymentLog('Build command completed successfully');
-          } catch (error) {
-            addDeploymentLog(`Build command failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-            // Don't fail deployment for build command errors
-          }
+          addDeploymentLog(`Executing enhanced build command: ${enhancedBuildCommand}`);
+          await this.runCommandWithLogs(enhancedBuildCommand, botDir, addDeploymentLog);
+          addDeploymentLog('Build command completed successfully');
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : 'Unknown build error';
+          addDeploymentLog(`Build command failed: ${errorMsg}`);
+          addDeploymentLog('Continuing with deployment - some dependencies may be missing');
         }
       }
 
-      // Update status to stopped (ready to start)
       await storage.updateBot(botId, { status: 'stopped' });
       this.emit('botStatusChanged', { botId, status: 'stopped' });
       addDeploymentLog('Deployment completed successfully');
@@ -131,332 +105,21 @@ export class BotManager extends EventEmitter {
     }
   }
 
-  async deployBotFromGitHub(botId: string, additionalEnvBuffer?: Buffer): Promise<void> {
-    const bot = await storage.getBot(botId);
-    if (!bot) throw new Error('Bot not found');
-    if (!bot.githubRepoUrl) throw new Error('GitHub repository URL not found');
-
-    // Initialize deployment logs for this bot
-    this.deploymentLogs.set(botId, []);
-    const addDeploymentLog = (message: string) => {
-      const log = `[${new Date().toISOString()}] ${message}`;
-      const logs = this.deploymentLogs.get(botId) || [];
-      logs.push(log);
-      this.deploymentLogs.set(botId, logs);
-      console.log(`[DEPLOY ${bot.name}] ${message}`);
-      this.emitLog(botId, log);
-    };
-
-    try {
-      // Update status to deploying
-      await storage.updateBot(botId, { status: 'deploying' });
-      this.emit('botStatusChanged', { botId, status: 'deploying' });
-      addDeploymentLog('Starting GitHub deployment...');
-
-      // Clone the repository
-      addDeploymentLog(`Cloning repository: ${bot.githubRepoUrl}`);
-      const botDir = await this.cloneGitHubRepository(bot.githubRepoUrl, bot.name, addDeploymentLog);
-      
-      // Look for and parse .env files in the repository
-      addDeploymentLog('Searching for environment variables...');
-      let repoEnvVars: Record<string, string> = {};
-      try {
-        const envContent = await this.findAndReadEnvFile(botDir);
-        if (envContent) {
-          repoEnvVars = fileManager.parseEnvContent(envContent, '.env file from repository');
-          addDeploymentLog(`Found .env file with ${Object.keys(repoEnvVars).length} variables`);
-        } else {
-          addDeploymentLog('No .env file found in repository');
-        }
-      } catch (error) {
-        addDeploymentLog('Warning: Could not read .env file from repository');
-      }
-      
-      // Parse additional .env file if provided
-      let additionalEnvVars: Record<string, string> = {};
-      if (additionalEnvBuffer) {
-        addDeploymentLog('Processing additional .env file...');
-        const additionalEnvContent = additionalEnvBuffer.toString('utf8');
-        additionalEnvVars = fileManager.parseEnvContent(additionalEnvContent, 'additional .env file');
-        addDeploymentLog(`Additional .env file contains ${Object.keys(additionalEnvVars).length} variables`);
-      }
-      
-      // Merge environment variables (additional overrides repository)
-      const mergedEnvVars = fileManager.mergeEnvVars(repoEnvVars, additionalEnvVars);
-      
-      // Store merged environment variables
-      const envVarsJson = Object.keys(mergedEnvVars).length > 0 ? JSON.stringify(mergedEnvVars) : null;
-      await storage.updateBot(botId, { 
-        filePath: botDir,
-        environmentVars: envVarsJson
-      });
-      
-      addDeploymentLog(`Repository cloned to: ${botDir}`);
-      if (Object.keys(mergedEnvVars).length > 0) {
-        addDeploymentLog(`Total environment variables loaded: ${Object.keys(mergedEnvVars).length}`);
-        addDeploymentLog(`Environment variables: ${Object.keys(mergedEnvVars).join(', ')}`);
-        if (Object.keys(additionalEnvVars).length > 0) {
-          addDeploymentLog(`Additional .env file overrode ${Object.keys(additionalEnvVars).length} variables`);
-        }
-      }
-
-      // Handle build command - skip pip installs in Replit environment
-      if (bot.buildCommand) {
-        addDeploymentLog(`Build command specified: ${bot.buildCommand}`);
-        
-        // Check if it's a pip install command
-        if (bot.buildCommand.includes('pip install') || bot.buildCommand.includes('requirements.txt')) {
-          addDeploymentLog('Skipping pip install commands in Replit environment (packages are pre-installed)');
-        } else {
-          addDeploymentLog('Executing custom build command...');
-          try {
-            await this.runCommandWithLogs(bot.buildCommand, botDir, addDeploymentLog);
-            addDeploymentLog('Build command completed successfully');
-          } catch (error) {
-            addDeploymentLog(`Build command failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-            // Don't fail deployment for build command errors
-          }
-        }
-      }
-
-      // Update status to stopped (ready to start)
-      await storage.updateBot(botId, { status: 'stopped' });
-      this.emit('botStatusChanged', { botId, status: 'stopped' });
-      addDeploymentLog('GitHub deployment completed successfully');
-      
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown GitHub deployment error';
-      addDeploymentLog(`GITHUB DEPLOYMENT FAILED: ${errorMessage}`);
-      await storage.updateBot(botId, { status: 'error' });
-      this.emit('botStatusChanged', { botId, status: 'error' });
-      throw error;
-    }
-  }
-
-  private async cloneGitHubRepository(repoUrl: string, botName: string, logFunction: (message: string) => void): Promise<string> {
-    const botsDir = path.join(process.cwd(), 'bots');
-    const botDir = path.join(botsDir, botName);
-    
-    // Ensure bots directory exists
-    await fs.mkdir(botsDir, { recursive: true });
-    
-    // Remove existing directory if it exists
-    try {
-      await fs.rmdir(botDir, { recursive: true });
-      logFunction('Removed existing bot directory');
-    } catch (error) {
-      // Directory doesn't exist, which is fine
-    }
-    
-    try {
-      const git = simpleGit();
-      logFunction('Initializing Git clone...');
-      
-      // Clone the repository
-      await git.clone(repoUrl, botDir);
-      logFunction('Repository cloned successfully');
-      
-      return botDir;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown git error';
-      logFunction(`Git clone failed: ${errorMessage}`);
-      throw new Error(`Failed to clone repository: ${errorMessage}`);
-    }
-  }
-
-  private async findAndReadEnvFile(botDir: string): Promise<string | null> {
-    const possibleEnvFiles = ['.env', 'config.env', '.env.example'];
-    
-    for (const envFile of possibleEnvFiles) {
-      const envPath = path.join(botDir, envFile);
-      try {
-        const envContent = await fs.readFile(envPath, 'utf8');
-        if (envContent.trim().length > 0) {
-          return envContent;
-        }
-      } catch (error) {
-        // File doesn't exist or can't be read, continue to next file
-        continue;
-      }
-    }
-    
-    return null;
-  }
-
-  async deployBotFromDocker(botId: string, additionalEnvBuffer?: Buffer): Promise<void> {
-    const bot = await storage.getBot(botId);
-    if (!bot) throw new Error('Bot not found');
-    if (!bot.githubRepoUrl) throw new Error('Repository URL not found');
-
-    // Initialize deployment logs for this bot
-    this.deploymentLogs.set(botId, []);
-    const addDeploymentLog = (message: string) => {
-      const log = `[${new Date().toISOString()}] ${message}`;
-      const logs = this.deploymentLogs.get(botId) || [];
-      logs.push(log);
-      this.deploymentLogs.set(botId, logs);
-      console.log(`[DEPLOY ${bot.name}] ${message}`);
-      this.emitLog(botId, log);
-    };
-
-    try {
-      // Update status to deploying
-      await storage.updateBot(botId, { status: 'deploying' });
-      this.emit('botStatusChanged', { botId, status: 'deploying' });
-      addDeploymentLog('Starting Docker deployment...');
-
-      // Clone the repository
-      addDeploymentLog(`Cloning repository: ${bot.githubRepoUrl}`);
-      const botDir = await this.cloneGitHubRepository(bot.githubRepoUrl, bot.name, addDeploymentLog);
-      
-      // Check for Dockerfile
-      addDeploymentLog('Checking for Dockerfile...');
-      const dockerfilePath = path.join(botDir, 'Dockerfile');
-      try {
-        await fs.access(dockerfilePath);
-        addDeploymentLog('Dockerfile found - proceeding with Docker build');
-      } catch (error) {
-        throw new Error('No Dockerfile found in repository root. Please ensure your repository contains a Dockerfile.');
-      }
-      
-      // Look for and parse .env files in the repository
-      addDeploymentLog('Searching for environment variables...');
-      let repoEnvVars: Record<string, string> = {};
-      try {
-        const envContent = await this.findAndReadEnvFile(botDir);
-        if (envContent) {
-          repoEnvVars = fileManager.parseEnvContent(envContent, '.env file from repository');
-          addDeploymentLog(`Found .env file with ${Object.keys(repoEnvVars).length} variables`);
-        } else {
-          addDeploymentLog('No .env file found in repository');
-        }
-      } catch (error) {
-        addDeploymentLog('Warning: Could not read .env file from repository');
-      }
-      
-      // Parse additional .env file if provided
-      let additionalEnvVars: Record<string, string> = {};
-      if (additionalEnvBuffer) {
-        addDeploymentLog('Processing additional .env file...');
-        const additionalEnvContent = additionalEnvBuffer.toString('utf8');
-        additionalEnvVars = fileManager.parseEnvContent(additionalEnvContent, 'additional .env file');
-        addDeploymentLog(`Additional .env file contains ${Object.keys(additionalEnvVars).length} variables`);
-      }
-      
-      // Merge environment variables (additional overrides repository)
-      const mergedEnvVars = fileManager.mergeEnvVars(repoEnvVars, additionalEnvVars);
-      
-      // Build Docker image
-      addDeploymentLog('Building Docker image...');
-      const imageName = `host-elite-bot-${bot.name.toLowerCase()}:latest`;
-      const buildResult = await this.buildDockerImage(botDir, imageName, addDeploymentLog);
-      
-      if (!buildResult.success) {
-        throw new Error(`Docker build failed: ${buildResult.error}`);
-      }
-      
-      // Store merged environment variables and Docker image name
-      const envVarsJson = Object.keys(mergedEnvVars).length > 0 ? JSON.stringify(mergedEnvVars) : null;
-      await storage.updateBot(botId, { 
-        filePath: imageName, // Store Docker image name instead of file path
-        environmentVars: envVarsJson
-      });
-      
-      addDeploymentLog(`Docker image built successfully: ${imageName}`);
-      if (Object.keys(mergedEnvVars).length > 0) {
-        addDeploymentLog(`Total environment variables loaded: ${Object.keys(mergedEnvVars).length}`);
-        addDeploymentLog(`Environment variables: ${Object.keys(mergedEnvVars).join(', ')}`);
-      }
-
-      // Update status to stopped (ready to start)
-      await storage.updateBot(botId, { status: 'stopped' });
-      this.emit('botStatusChanged', { botId, status: 'stopped' });
-      addDeploymentLog('Docker deployment completed successfully');
-      
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown Docker deployment error';
-      addDeploymentLog(`DOCKER DEPLOYMENT FAILED: ${errorMessage}`);
-      await storage.updateBot(botId, { status: 'error' });
-      this.emit('botStatusChanged', { botId, status: 'error' });
-      throw error;
-    }
-  }
-
-  private async buildDockerImage(botDir: string, imageName: string, logFunction: (message: string) => void): Promise<{success: boolean, error?: string}> {
-    return new Promise((resolve) => {
-      try {
-        const buildProcess = spawn('docker', ['build', '-t', imageName, '.'], {
-          cwd: botDir,
-          stdio: ['pipe', 'pipe', 'pipe']
-        });
-
-        let buildOutput = '';
-        let buildError = '';
-
-        buildProcess.stdout?.on('data', (data) => {
-          const output = data.toString();
-          buildOutput += output;
-          // Log key build steps
-          const lines = output.split('\n').filter(line => line.trim());
-          lines.forEach((line: string) => {
-            if (line.includes('Step ') || line.includes('Successfully built') || line.includes('Successfully tagged')) {
-              logFunction(`Docker: ${line.trim()}`);
-            }
-          });
-        });
-
-        buildProcess.stderr?.on('data', (data) => {
-          const error = data.toString();
-          buildError += error;
-          logFunction(`Docker Error: ${error.trim()}`);
-        });
-
-        buildProcess.on('exit', (code) => {
-          if (code === 0) {
-            logFunction('Docker image built successfully');
-            resolve({ success: true });
-          } else {
-            logFunction(`Docker build failed with exit code ${code}`);
-            resolve({ success: false, error: buildError || 'Unknown build error' });
-          }
-        });
-
-        buildProcess.on('error', (error) => {
-          logFunction(`Docker build process error: ${error.message}`);
-          resolve({ success: false, error: error.message });
-        });
-
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        logFunction(`Failed to start Docker build: ${errorMessage}`);
-        resolve({ success: false, error: errorMessage });
-      }
-    });
-  }
-
   async startBot(botId: string): Promise<void> {
     const bot = await storage.getBot(botId);
     if (!bot || !bot.filePath) throw new Error('Bot not found or not deployed');
-
-    if (this.activeProcesses.has(botId)) {
-      throw new Error('Bot is already running');
-    }
+    if (this.activeProcesses.has(botId)) throw new Error('Bot is already running');
 
     try {
-      // Check if this is a Docker deployment (filePath contains Docker image name)
       const isDockerDeployment = bot.deploymentSource === 'docker' && bot.filePath.includes('host-elite-bot-');
-      
       let childProcess: ChildProcess;
       
       if (isDockerDeployment) {
-        // Start Docker container
+        // Docker deployment logic
         const containerName = `host-elite-bot-${bot.name.toLowerCase()}-${Date.now()}`;
-        const imageName = bot.filePath; // Docker image name is stored in filePath
-        
-        // Generate a unique port for each bot (starting from 8080)
+        const imageName = bot.filePath;
         const botPort = 8080 + parseInt(botId.slice(-4), 16) % 1000;
         
-        // Parse stored environment variables
         let botEnvVars: Record<string, string> = {};
         if (bot.environmentVars) {
           try {
@@ -466,39 +129,26 @@ export class BotManager extends EventEmitter {
           }
         }
         
-        // Build Docker run command with environment variables
         const envArgs: string[] = [];
         for (const [key, value] of Object.entries(botEnvVars)) {
           envArgs.push('-e', `${key}=${value}`);
         }
-        
-        // Add default environment variables
         envArgs.push('-e', `PORT=${botPort}`, '-e', `BOT_PORT=${botPort}`);
         
         const dockerArgs = [
-          'run',
-          '--name', containerName,
-          '--rm', // Remove container when it stops
-          '-p', `${botPort}:${botPort}`, // Port mapping
-          ...envArgs,
-          imageName
+          'run', '--name', containerName, '--rm',
+          '-p', `${botPort}:${botPort}`,
+          ...envArgs, imageName
         ];
         
-        childProcess = spawn('docker', dockerArgs, {
-          stdio: ['pipe', 'pipe', 'pipe']
-        });
-        
+        childProcess = spawn('docker', dockerArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
         console.log(`[${bot.name}] Starting Docker container: ${containerName} from image ${imageName}`);
       } else {
-        // Start regular process (ZIP or GitHub deployment)
-        // Replace python/pip with python3/python3 -m pip for compatibility
+        // FIXED: Regular process deployment with proper spawning
         let enhancedRunCommand = bot.runCommand.replace(/\bpython\b/g, 'python3');
         enhancedRunCommand = enhancedRunCommand.replace(/\bpip\b/g, 'python3 -m pip');
         
-        // Generate a unique port for each bot (starting from 8080)
         const botPort = 8080 + parseInt(botId.slice(-4), 16) % 1000;
-        
-        // Parse stored environment variables
         let botEnvVars: Record<string, string> = {};
         if (bot.environmentVars) {
           try {
@@ -508,14 +158,20 @@ export class BotManager extends EventEmitter {
           }
         }
         
-        childProcess = spawn('sh', ['-c', enhancedRunCommand], {
+        // FIXED: Better command parsing
+        const commandParts = enhancedRunCommand.trim().split(/\s+/);
+        const executable = commandParts[0];
+        const args = commandParts.slice(1);
+
+        childProcess = spawn(executable, args, {
           cwd: bot.filePath,
           stdio: ['pipe', 'pipe', 'pipe'],
           env: {
             ...process.env,
-            ...botEnvVars, // Apply bot-specific environment variables
+            ...botEnvVars,
             PORT: botPort.toString(),
-            BOT_PORT: botPort.toString()
+            BOT_PORT: botPort.toString(),
+            NODE_ENV: 'production'
           }
         });
       }
@@ -533,7 +189,7 @@ export class BotManager extends EventEmitter {
 
       this.activeProcesses.set(botId, botProcess);
 
-      // Handle process output
+      // FIXED: Enhanced process event handling
       childProcess.stdout?.on('data', (data) => {
         const log = `[${new Date().toISOString()}] ${data.toString().trim()}`;
         botProcess.logs.push(log);
@@ -546,10 +202,26 @@ export class BotManager extends EventEmitter {
         this.emitLog(botId, log);
       });
 
+      childProcess.on('spawn', async () => {
+        console.log(`[${bot.name}] Bot process started successfully with PID ${childProcess.pid}`);
+        await storage.updateBot(botId, { 
+          status: 'running', 
+          processId: childProcess.pid?.toString() || null 
+        });
+        this.emit('botStatusChanged', { botId, status: 'running' });
+      });
+
+      childProcess.on('error', async (error) => {
+        console.error(`[${bot.name}] Process error: ${error.message}`);
+        this.activeProcesses.delete(botId);
+        await storage.updateBot(botId, { status: 'error', processId: null });
+        this.emit('botStatusChanged', { botId, status: 'error' });
+      });
+
       childProcess.on('exit', async (code, signal) => {
+        console.log(`[${bot.name}] Process exited with code ${code} and signal ${signal}`);
         this.activeProcesses.delete(botId);
         
-        // Determine status based on exit conditions
         let status: 'stopped' | 'error' = 'stopped';
         if (code !== 0 && signal !== 'SIGKILL' && signal !== 'SIGTERM') {
           status = 'error';
@@ -558,7 +230,6 @@ export class BotManager extends EventEmitter {
         await storage.updateBot(botId, { status, processId: null });
         this.emit('botStatusChanged', { botId, status });
         
-        // Enhanced auto-restart logic
         if (bot.autoRestart && status === 'error') {
           const restartDelay = Math.min(5000 * (botProcess.restartCount || 0) + 5000, 30000);
           setTimeout(() => {
@@ -567,197 +238,160 @@ export class BotManager extends EventEmitter {
         }
       });
 
-      await storage.updateBot(botId, { status: 'running', processId: childProcess.pid });
-      this.emit('botStatusChanged', { botId, status: 'running' });
-
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[${bot.name}] Failed to start bot: ${errorMessage}`);
       await storage.updateBot(botId, { status: 'error' });
       this.emit('botStatusChanged', { botId, status: 'error' });
       throw error;
     }
   }
 
-  async stopBot(botId: string, immediate: boolean = false): Promise<void> {
+  async stopBot(botId: string, immediate = false): Promise<void> {
     const botProcess = this.activeProcesses.get(botId);
     if (!botProcess) throw new Error('Bot is not running');
 
-    // Use SIGKILL for immediate stop, SIGTERM for graceful stop
-    const signal = immediate ? 'SIGKILL' : 'SIGTERM';
-    botProcess.process.kill(signal);
-    
-    // Wait for process to actually terminate if using SIGTERM
-    if (!immediate) {
-      await new Promise(resolve => {
-        const timeout = setTimeout(() => {
-          // Force kill if process doesn't respond to SIGTERM within 3 seconds
-          if (!botProcess.process.killed) {
-            botProcess.process.kill('SIGKILL');
-          }
-          resolve(undefined);
-        }, 3000);
-        
-        botProcess.process.on('exit', () => {
-          clearTimeout(timeout);
-          resolve(undefined);
-        });
-      });
-    }
-    
-    this.activeProcesses.delete(botId);
-    await storage.updateBot(botId, { status: 'stopped', processId: null });
-    this.emit('botStatusChanged', { botId, status: 'stopped' });
-  }
-
-  async restartBot(botId: string): Promise<void> {
-    if (this.activeProcesses.has(botId)) {
-      await this.stopBot(botId, true); // Force immediate stop on restart
-      // Wait a bit before restarting
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-    await this.startBot(botId);
-  }
-
-  // Enhanced bot management methods
-  async forceStopBot(botId: string): Promise<void> {
-    const botProcess = this.activeProcesses.get(botId);
-    if (!botProcess) throw new Error('Bot is not running');
-
-    try {
-      // Force kill immediately with SIGKILL
+    if (immediate) {
       botProcess.process.kill('SIGKILL');
-      
-      // Immediately cleanup without waiting
-      this.activeProcesses.delete(botId);
-      await storage.updateBot(botId, { status: 'stopped', processId: null });
-      this.emit('botStatusChanged', { botId, status: 'stopped' });
-      
-      console.log(`Bot ${botId} force stopped immediately with SIGKILL`);
-    } catch (error) {
-      console.error(`Failed to force stop bot ${botId}:`, error);
-      throw error;
-    }
-  }
-
-  async getSystemStats(): Promise<{memoryUsage: NodeJS.MemoryUsage, uptime: number}> {
-    return {
-      memoryUsage: process.memoryUsage(),
-      uptime: process.uptime()
-    };
-  }
-
-  async performHealthCheck(botId: string): Promise<'healthy' | 'unhealthy' | 'unknown'> {
-    const botProcess = this.activeProcesses.get(botId);
-    if (!botProcess) return 'unknown';
-    
-    // Check if process is still alive and responsive
-    try {
-      const isAlive = !botProcess.process.killed && botProcess.process.pid;
-      botProcess.lastHealthCheck = new Date();
-      botProcess.healthStatus = isAlive ? 'healthy' : 'unhealthy';
-      return botProcess.healthStatus;
-    } catch (error) {
-      botProcess.healthStatus = 'unhealthy';
-      return 'unhealthy';
-    }
-  }
-
-  async deleteBot(botId: string): Promise<void> {
-    const bot = await storage.getBot(botId);
-    if (!bot) throw new Error('Bot not found');
-
-    // Stop bot if running
-    if (this.activeProcesses.has(botId)) {
-      await this.stopBot(botId);
+    } else {
+      botProcess.process.kill('SIGTERM');
     }
 
-    // Delete files
-    await fileManager.deleteBotFiles(bot.name);
-
-    // Remove from storage
-    await storage.deleteBot(botId);
-  }
-
-  getBotLogs(botId: string): string[] {
-    const botProcess = this.activeProcesses.get(botId);
-    const deploymentLogs = this.deploymentLogs.get(botId) || [];
-    const runtimeLogs = botProcess?.logs || [];
-    return [...deploymentLogs, ...runtimeLogs];
-  }
-
-  addLogListener(botId: string, callback: (log: string) => void): void {
-    if (!this.logListeners.has(botId)) {
-      this.logListeners.set(botId, new Set());
-    }
-    this.logListeners.get(botId)!.add(callback);
-  }
-
-  removeLogListener(botId: string, callback: (log: string) => void): void {
-    this.logListeners.get(botId)?.delete(callback);
-  }
-
-  private emitLog(botId: string, log: string): void {
-    const listeners = this.logListeners.get(botId);
-    if (listeners) {
-      listeners.forEach(callback => callback(log));
-    }
-    this.emit('botLog', { botId, log });
-  }
-
-  private async runCommand(command: string, cwd: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const childProcess = spawn('sh', ['-c', command], { cwd });
-      
-      childProcess.on('exit', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Command failed with exit code ${code}`));
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        if (botProcess.process.killed === false) {
+          botProcess.process.kill('SIGKILL');
         }
-      });
+        resolve();
+      }, 5000);
 
-      childProcess.on('error', reject);
+      botProcess.process.on('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
     });
   }
 
-  private async runCommandWithLogs(command: string, cwd: string, logCallback: (message: string) => void): Promise<void> {
+  async restartBot(botId: string): Promise<void> {
+    try {
+      await this.stopBot(botId);
+    } catch (error) {
+      // Bot might not be running
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    await this.startBot(botId);
+  }
+
+  async forceStopBot(botId: string): Promise<void> {
+    return this.stopBot(botId, true);
+  }
+
+  async deleteBot(botId: string): Promise<void> {
+    try {
+      await this.forceStopBot(botId);
+    } catch (error) {
+      // Bot might not be running
+    }
+
+    const bot = await storage.getBot(botId);
+    if (bot && bot.filePath) {
+      try {
+        await fs.rm(bot.filePath, { recursive: true, force: true });
+      } catch (error) {
+        console.warn(`Failed to remove bot files: ${error}`);
+      }
+    }
+
+    await storage.deleteBot(botId);
+    this.deploymentLogs.delete(botId);
+    this.activeProcesses.delete(botId);
+    this.emit('botStatusChanged', { botId, status: 'deleted' });
+  }
+
+  getBotLogs(botId: string): string[] {
+    const deploymentLogs = this.deploymentLogs.get(botId) || [];
+    const botProcess = this.activeProcesses.get(botId);
+    const runtimeLogs = botProcess ? botProcess.logs : [];
+    return [...deploymentLogs, ...runtimeLogs];
+  }
+
+  emitLog(botId: string, log: string): void {
+    this.emit('botLog', { botId, log });
+  }
+
+  async getSystemStats() {
+    const allBots = await storage.getAllBots();
+    const runningBots = Array.from(this.activeProcesses.keys());
+    
+    return {
+      totalBots: allBots.length,
+      runningBots: runningBots.length,
+      stoppedBots: allBots.filter(bot => bot.status === 'stopped').length,
+      errorBots: allBots.filter(bot => bot.status === 'error').length,
+      deployingBots: allBots.filter(bot => bot.status === 'deploying').length,
+      activeProcesses: runningBots,
+      uptime: process.uptime(),
+      memoryUsage: process.memoryUsage()
+    };
+  }
+
+  async performHealthCheck(botId: string): Promise<string> {
+    const bot = await storage.getBot(botId);
+    if (!bot) return 'not_found';
+    
+    const isRunning = this.activeProcesses.has(botId);
+    return isRunning ? 'healthy' : 'stopped';
+  }
+
+  private async runCommandWithLogs(command: string, workingDir: string, logFunction: (message: string) => void): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Replace pip with python3 -m pip for Python installations  
-      let enhancedCommand = command.replace(/\bpython\b/g, 'python3');
-      enhancedCommand = enhancedCommand.replace(/\bpip\b/g, 'python3 -m pip');
+      logFunction(`Running: ${command}`);
       
-      const childProcess = spawn('sh', ['-c', enhancedCommand], { 
-        cwd, 
+      const [cmd, ...args] = command.trim().split(/\s+/);
+      const childProcess = spawn(cmd, args, {
+        cwd: workingDir,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: process.env
+        env: { ...process.env, NODE_ENV: 'production' }
       });
-      
+
+      let output = '';
+      let errorOutput = '';
+
       childProcess.stdout?.on('data', (data) => {
-        const output = data.toString().trim();
-        if (output) {
-          logCallback(`STDOUT: ${output}`);
-        }
+        const text = data.toString();
+        output += text;
+        logFunction(`STDOUT: ${text.trim()}`);
       });
 
       childProcess.stderr?.on('data', (data) => {
-        const output = data.toString().trim();
-        if (output) {
-          logCallback(`STDERR: ${output}`);
-        }
+        const text = data.toString();
+        errorOutput += text;
+        logFunction(`STDERR: ${text.trim()}`);
       });
-      
+
       childProcess.on('exit', (code) => {
         if (code === 0) {
+          logFunction(`Command completed successfully`);
           resolve();
         } else {
-          reject(new Error(`Command failed with exit code ${code}`));
+          logFunction(`Command failed with exit code ${code}`);
+          reject(new Error(`Command failed: ${errorOutput || 'Unknown error'}`));
         }
       });
 
       childProcess.on('error', (error) => {
-        logCallback(`PROCESS ERROR: ${error.message}`);
+        logFunction(`Command error: ${error.message}`);
         reject(error);
       });
     });
+  }
+
+  async deployBotFromGitHub(botId: string, additionalEnvBuffer?: Buffer): Promise<void> {
+    throw new Error('GitHub deployment not yet implemented');
+  }
+
+  async deployBotFromDocker(botId: string, additionalEnvBuffer?: Buffer): Promise<void> {
+    throw new Error('Docker deployment not yet implemented');
   }
 }
 
