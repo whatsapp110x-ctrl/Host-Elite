@@ -22,8 +22,11 @@ RUN mkdir -p attached_assets bots deployed_bots dist
 # Set NODE_ENV for build
 ENV NODE_ENV=development
 
-# Build using the root package.json script which handles paths correctly
-RUN npm run build
+# Build frontend
+RUN npx vite build
+
+# Build backend with explicit options to handle import.meta.dirname
+RUN npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist --define:import.meta.dirname='"/app"'
 
 # Verify and fix build structure - the server expects public directory next to the compiled server
 RUN ls -la dist/ && \
