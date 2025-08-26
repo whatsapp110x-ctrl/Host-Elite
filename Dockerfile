@@ -25,11 +25,20 @@ ENV NODE_ENV=development
 # Build using the root package.json script which handles paths correctly
 RUN npm run build
 
+# Verify and fix build structure - the server expects public directory next to the compiled server
+RUN ls -la dist/ && \
+    if [ -d "dist/public" ]; then \
+      echo "Build structure is correct"; \
+    else \
+      echo "Creating missing directories" && mkdir -p dist/public; \
+    fi
+
 # Set production environment for runtime
 ENV NODE_ENV=production
 
 # Expose port
 EXPOSE 5000
 
-# Start the application
-CMD ["node", "dist/index.js"]
+# Start the application with explicit environment and working directory
+WORKDIR /app
+CMD ["sh", "-c", "PORT=${PORT:-5000} NODE_ENV=production node dist/index.js"]
