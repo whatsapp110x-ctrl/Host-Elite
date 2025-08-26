@@ -22,9 +22,8 @@ RUN mkdir -p attached_assets bots deployed_bots dist
 # Set NODE_ENV for build
 ENV NODE_ENV=development
 
-# Build the frontend and backend separately
-RUN cd client && npx vite build
-RUN npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist
+# Build using the root package.json script which handles paths correctly
+RUN npm run build
 
 # Set production environment for runtime
 ENV NODE_ENV=production
