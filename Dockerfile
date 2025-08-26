@@ -27,8 +27,8 @@ COPY bots/ ./bots/
 COPY deployed_bots/ ./deployed_bots/
 COPY attached_assets/ ./attached_assets/
 
-# Build the application
-RUN npm run build
+# Build the application using npx to ensure dependencies are found
+RUN npx vite build && npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist
 
 # Verify build output
 RUN ls -la dist/ && ls -la dist/public/ && echo "Build verification complete"
