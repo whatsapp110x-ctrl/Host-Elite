@@ -1,12 +1,12 @@
 services:
-  - type: web
-    name: bot-hosting-platform
-    env: node
-    plan: free
-    region: oregon
-    buildCommand: npm ci --include=dev && npm run build
-    startCommand: npm start
-    envVars:
-      - key: NODE_ENV
-        value: production
-    healthCheckPath: /api/health
+- type: web
+  name: bot-platform
+  env: node
+  plan: free
+  buildCommand: NODE_OPTIONS='--max-old-space-size=512' npm run build
+  startCommand: NODE_OPTIONS='--max-old-space-size=400' npm start
+  envVars:
+  - key: NODE_ENV
+    value: production
+  - key: PORT
+    value: 10000
