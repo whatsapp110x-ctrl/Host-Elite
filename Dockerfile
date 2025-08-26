@@ -7,6 +7,9 @@ RUN apk add --no-cache git
 # Set working directory
 WORKDIR /app
 
+# Set production environment
+ENV NODE_ENV=production
+
 # Copy package files
 COPY package*.json ./
 
@@ -27,11 +30,14 @@ COPY attached_assets/ ./attached_assets/
 # Build the application
 RUN npm run build
 
-# Don't remove dev dependencies - keep them for production server
-# RUN npm prune --production
+# Verify build output
+RUN ls -la dist/ && ls -la dist/public/ && echo "Build verification complete"
 
-# Expose port
-EXPOSE $PORT
+# Create additional required directories
+RUN mkdir -p bots deployed_bots
 
-# Start the application  
-CMD ["npm", "start"]
+# Expose port (Render will set PORT environment variable)
+EXPOSE 5000
+
+# Start the application with explicit production mode
+CMD ["sh", "-c", "NODE_ENV=production npm start"]
