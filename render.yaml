@@ -9,4 +9,5 @@ services:
   - key: NODE_ENV
     value: production
   - key: PORT
-    value: 10000
+    generateValue: true
+  healthCheckPath: /api/health
