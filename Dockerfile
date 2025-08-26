@@ -13,17 +13,22 @@ COPY package*.json ./
 # Install ALL dependencies (including dev dependencies needed for build)
 RUN npm ci
 
-# Copy all source files at once
-COPY . .
+# Copy configuration files
+COPY vite.config.ts tsconfig.json tailwind.config.ts postcss.config.js components.json drizzle.config.ts ./
 
-# Create required directories if they don't exist
-RUN mkdir -p attached_assets bots deployed_bots dist
+# Copy source directories
+COPY client/ ./client/
+COPY server/ ./server/
+COPY shared/ ./shared/
+COPY bots/ ./bots/
+COPY deployed_bots/ ./deployed_bots/
+COPY attached_assets/ ./attached_assets/
 
 # Build the application
 RUN npm run build
 
-# Remove dev dependencies after build to reduce image size
-RUN npm prune --production
+# Don't remove dev dependencies - keep them for production server
+# RUN npm prune --production
 
 # Expose port
 EXPOSE $PORT
