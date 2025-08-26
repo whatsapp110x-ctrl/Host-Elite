@@ -7,14 +7,10 @@ npm-debug.log*
 .env.development.local
 .env.test.local
 .env.production.local
-dist/
 .replit
 replit.nix
 .upm
 .config
+.git
 .gitignore
 README.md
-*.md
-attached_assets/Screenshot_*
-attached_assets/*.mp4
-attached_assets/*.zip
