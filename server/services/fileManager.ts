@@ -4,13 +4,16 @@ import path from 'path';
 import { spawn } from 'child_process';
 
 export class FileManager {
-  private readonly botsDir = path.join(process.cwd(), 'deployed_bots');
+  private readonly botsDir = process.env.RENDER 
+    ? path.join('/opt/render/project/src', 'deployed_bots')
+    : path.join(process.cwd(), 'deployed_bots');
 
   async ensureBotsDirectory(): Promise<void> {
     try {
       await fs.access(this.botsDir);
     } catch {
-      await fs.mkdir(this.botsDir, { recursive: true });
+      await fs.mkdir(this.botsDir, { recursive: true, mode: 0o755 });
+      console.log(`[FileManager] Created bots directory: ${this.botsDir}`);
     }
   }
 
@@ -80,28 +83,19 @@ export class FileManager {
       
       try {
         const envContent = await fs.readFile(envPath, 'utf8');
-        const envVars = this.parseEnvContent(envContent, `ZIP ${envFile} file`);
-        
-        // Merge variables (.env has priority over config.env if both exist)
-        if (envFile === '.env') {
-          allEnvVars = { ...allEnvVars, ...envVars };
-        } else {
-          allEnvVars = { ...envVars, ...allEnvVars };
-        }
+        const envVars = this.parseEnvContent(envContent, envFile);
+        allEnvVars = { ...allEnvVars, ...envVars };
       } catch (error) {
-        // File doesn't exist or can't be read, that's okay
-        console.log(`No ${envFile} file found in ZIP or error reading it:`, error instanceof Error ? error.message : 'Unknown error');
+        // File doesn't exist, continue
       }
     }
     
     return allEnvVars;
   }
 
-  parseEnvContent(envContent: string, source: string): Record<string, string> {
+  parseEnvContent(content: string, source: string): Record<string, string> {
     const envVars: Record<string, string> = {};
-    
-    // Parse .env file line by line
-    const lines = envContent.split('\n');
+    const lines = content.split('\n');
     
     for (const line of lines) {
       const trimmedLine = line.trim();
@@ -123,175 +117,246 @@ export class FileManager {
           value = value.slice(1, -1);
         }
         
-        envVars[key] = value;
+        if (key && value) {
+          envVars[key] = value;
+        }
       }
     }
     
-    console.log(`Found ${source} with ${Object.keys(envVars).length} variables:`, Object.keys(envVars));
+    console.log(`[FileManager] Parsed ${Object.keys(envVars).length} environment variables from ${source}`);
     return envVars;
   }
 
-  mergeEnvVars(zipEnvVars: Record<string, string>, additionalEnvVars: Record<string, string>): Record<string, string> {
-    // Additional env vars override ZIP env vars
-    const merged = { ...zipEnvVars, ...additionalEnvVars };
+  mergeEnvVars(baseVars: Record<string, string>, overrideVars: Record<string, string>): Record<string, string> {
+    const merged = { ...baseVars, ...overrideVars };
     
-    if (Object.keys(additionalEnvVars).length > 0) {
-      console.log('Merged environment variables:', {
-        zipVars: Object.keys(zipEnvVars).length,
-        additionalVars: Object.keys(additionalEnvVars).length,
-        totalMerged: Object.keys(merged).length
-      });
+    // Log any overrides
+    const overriddenKeys = Object.keys(overrideVars).filter(key => 
+      baseVars.hasOwnProperty(key) && baseVars[key] !== overrideVars[key]
+    );
+    
+    if (overriddenKeys.length > 0) {
+      console.log(`[FileManager] Environment variables overridden: ${overriddenKeys.join(', ')}`);
     }
     
     return merged;
   }
 
-  getBotDirectory(botName: string): string {
-    return path.join(this.botsDir, botName);
+  async generateRunScript(botDir: string, runCommand: string, envVars: Record<string, string>): Promise<string> {
+    const scriptPath = path.join(botDir, 'run.sh');
+    
+    // Create environment variable exports
+    const envExports = Object.entries(envVars)
+      .map(([key, value]) => `export ${key}="${value.replace(/"/g, '\\"')}"`)
+      .join('\n');
+    
+    const scriptContent = `#!/bin/bash
+# Auto-generated run script
+set -e
+
+# Set environment variables
+${envExports}
+
+# Execute the run command
+cd "${botDir}"
+${runCommand}
+`;
+    
+    await fs.writeFile(scriptPath, scriptContent, { mode: 0o755 });
+    return scriptPath;
   }
 
-  // File browsing and editing methods
-  async listBotFiles(botName: string): Promise<Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }>> {
-    const botDir = path.join(this.botsDir, botName);
+  async createDockerfile(botDir: string, language: string, runCommand: string): Promise<void> {
+    let dockerfileContent: string;
     
-    try {
-      await fs.access(botDir);
-    } catch {
-      throw new Error(`Bot ${botName} not found`);
-    }
+    switch (language) {
+      case 'python':
+        dockerfileContent = `FROM python:3.11-slim
 
-    const files: Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }> = [];
-    
-    const walkDir = async (dir: string, relativePath: string = '') => {
-      const items = await fs.readdir(dir);
-      
-      for (const item of items) {
-        const fullPath = path.join(dir, item);
-        const itemRelativePath = relativePath ? path.join(relativePath, item) : item;
-        const stats = await fs.stat(fullPath);
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY requirements.txt* ./
+RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+
+# Copy application files
+COPY . .
+
+# Create non-root user
+RUN useradd -m -u 1000 botuser && chown -R botuser:botuser /app
+USER botuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \\
+  CMD python -c "import requests; requests.get('http://localhost:$PORT/health')" || exit 1
+
+EXPOSE $PORT
+
+CMD ${runCommand}
+`;
+        break;
         
-        if (stats.isDirectory()) {
-          files.push({
-            name: item,
-            path: itemRelativePath,
-            type: 'directory'
-          });
-          await walkDir(fullPath, itemRelativePath);
-        } else {
-          files.push({
-            name: item,
-            path: itemRelativePath,
-            type: 'file',
-            size: stats.size
-          });
-        }
-      }
-    };
+      case 'nodejs':
+        dockerfileContent = `FROM node:18-slim
 
-    await walkDir(botDir);
-    return files.sort((a, b) => {
-      // Directories first, then files, both alphabetically
-      if (a.type !== b.type) {
-        return a.type === 'directory' ? -1 : 1;
+WORKDIR /app
+
+# Copy package files first for better caching
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy application files
+COPY . .
+
+# Create non-root user
+RUN useradd -m -u 1000 botuser && chown -R botuser:botuser /app
+USER botuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \\
+  CMD curl -f http://localhost:$PORT/health || exit 1
+
+EXPOSE $PORT
+
+CMD ${runCommand}
+`;
+        break;
+        
+      default:
+        throw new Error(`Unsupported language for Docker: ${language}`);
+    }
+    
+    const dockerfilePath = path.join(botDir, 'Dockerfile');
+    await fs.writeFile(dockerfilePath, dockerfileContent);
+  }
+
+  async installDependencies(botDir: string, language: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let command: string;
+      let args: string[];
+      
+      switch (language) {
+        case 'python':
+          const requirementsPath = path.join(botDir, 'requirements.txt');
+          fs.access(requirementsPath)
+            .then(() => {
+              command = 'pip';
+              args = ['install', '-r', 'requirements.txt'];
+            })
+            .catch(() => {
+              // No requirements.txt, skip installation
+              resolve();
+              return;
+            });
+          break;
+          
+        case 'nodejs':
+          const packagePath = path.join(botDir, 'package.json');
+          fs.access(packagePath)
+            .then(() => {
+              command = 'npm';
+              args = ['install'];
+            })
+            .catch(() => {
+              // No package.json, skip installation
+              resolve();
+              return;
+            });
+          break;
+          
+        default:
+          resolve(); // Unknown language, skip
+          return;
       }
-      return a.name.localeCompare(b.name);
+      
+      if (!command) {
+        resolve();
+        return;
+      }
+      
+      const installProcess = spawn(command, args, {
+        cwd: botDir,
+        stdio: 'pipe'
+      });
+      
+      let output = '';
+      let error = '';
+      
+      installProcess.stdout?.on('data', (data) => {
+        output += data.toString();
+      });
+      
+      installProcess.stderr?.on('data', (data) => {
+        error += data.toString();
+      });
+      
+      installProcess.on('exit', (code) => {
+        if (code === 0) {
+          console.log(`[FileManager] Dependencies installed successfully for ${language}`);
+          resolve();
+        } else {
+          console.error(`[FileManager] Failed to install dependencies: ${error}`);
+          reject(new Error(`Dependency installation failed: ${error}`));
+        }
+      });
+      
+      installProcess.on('error', (err) => {
+        console.error(`[FileManager] Process error during dependency installation: ${err}`);
+        reject(err);
+      });
     });
   }
 
-  async readBotFile(botName: string, filePath: string): Promise<{ content: string; isText: boolean; language: string }> {
+  async listBotFiles(botName: string): Promise<string[]> {
     const botDir = path.join(this.botsDir, botName);
-    const fullPath = path.join(botDir, filePath);
     
-    // Security check to prevent path traversal
-    if (!fullPath.startsWith(botDir)) {
-      throw new Error('Invalid file path');
-    }
-
     try {
-      const stats = await fs.stat(fullPath);
-      if (stats.isDirectory()) {
-        throw new Error('Cannot read directory as file');
-      }
-
-      // Check if file is too large (limit to 1MB for text files)
-      if (stats.size > 1024 * 1024) {
-        throw new Error('File too large to edit');
-      }
-
-      const content = await fs.readFile(fullPath, 'utf-8');
-      const language = this.getFileLanguage(filePath);
-      
-      return {
-        content,
-        isText: true,
-        language
-      };
+      const files = await fs.readdir(botDir, { recursive: true });
+      return files.filter(file => typeof file === 'string') as string[];
     } catch (error) {
-      if (error instanceof Error && error.message.includes('invalid')) {
-        throw error;
-      }
-      throw new Error('Failed to read file');
+      throw new Error(`Failed to list files for bot ${botName}: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  async writeBotFile(botName: string, filePath: string, content: string): Promise<void> {
+  async getBotFileContent(botName: string, filePath: string): Promise<string> {
     const botDir = path.join(this.botsDir, botName);
     const fullPath = path.join(botDir, filePath);
     
-    // Security check to prevent path traversal
+    // Security check - ensure path is within bot directory
     if (!fullPath.startsWith(botDir)) {
-      throw new Error('Invalid file path');
+      throw new Error('Invalid file path - outside bot directory');
     }
+    
+    try {
+      return await fs.readFile(fullPath, 'utf8');
+    } catch (error) {
+      throw new Error(`Failed to read file ${filePath}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
 
+  async updateBotFile(botName: string, filePath: string, content: string): Promise<void> {
+    const botDir = path.join(this.botsDir, botName);
+    const fullPath = path.join(botDir, filePath);
+    
+    // Security check - ensure path is within bot directory
+    if (!fullPath.startsWith(botDir)) {
+      throw new Error('Invalid file path - outside bot directory');
+    }
+    
     try {
       // Ensure directory exists
-      const dirname = path.dirname(fullPath);
-      await fs.mkdir(dirname, { recursive: true });
+      const dir = path.dirname(fullPath);
+      await fs.mkdir(dir, { recursive: true });
       
-      // Write file
-      await fs.writeFile(fullPath, content, 'utf-8');
+      await fs.writeFile(fullPath, content, 'utf8');
+      console.log(`[FileManager] Updated file: ${filePath} for bot ${botName}`);
     } catch (error) {
-      throw new Error('Failed to save file');
+      throw new Error(`Failed to update file ${filePath}: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  private getFileLanguage(filePath: string): string {
-    const ext = path.extname(filePath).toLowerCase();
-    
-    const languageMap: Record<string, string> = {
-      '.py': 'python',
-      '.js': 'javascript',
-      '.jsx': 'javascript',
-      '.ts': 'typescript',
-      '.tsx': 'typescript',
-      '.json': 'json',
-      '.html': 'html',
-      '.css': 'css',
-      '.scss': 'scss',
-      '.sass': 'sass',
-      '.md': 'markdown',
-      '.yml': 'yaml',
-      '.yaml': 'yaml',
-      '.xml': 'xml',
-      '.sh': 'shell',
-      '.bat': 'batch',
-      '.php': 'php',
-      '.rb': 'ruby',
-      '.go': 'go',
-      '.java': 'java',
-      '.c': 'c',
-      '.cpp': 'cpp',
-      '.h': 'c',
-      '.hpp': 'cpp',
-      '.rs': 'rust',
-      '.sql': 'sql',
-      '.dockerfile': 'dockerfile',
-      '.env': 'properties',
-      '.txt': 'plaintext',
-      '.log': 'plaintext'
-    };
-
-    return languageMap[ext] || 'plaintext';
+  getBotsDirectory(): string {
+    return this.botsDir;
   }
 }
 
