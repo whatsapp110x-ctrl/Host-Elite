@@ -195,27 +195,17 @@ export class BotManager extends EventEmitter {
       if (Object.keys(mergedEnvVars).length > 0) {
         addDeploymentLog(`Total environment variables loaded: ${Object.keys(mergedEnvVars).length}`);
         addDeploymentLog(`Environment variables: ${Object.keys(mergedEnvVars).join(', ')}`);
-        if (Object.keys(additionalEnvVars).length > 0) {
-          addDeploymentLog(`Additional .env file overrode ${Object.keys(additionalEnvVars).length} variables`);
-        }
       }
 
-      // Handle build command - skip pip installs in Replit environment
+      // Handle build command
       if (bot.buildCommand) {
-        addDeploymentLog(`Build command specified: ${bot.buildCommand}`);
-        
-        // Check if it's a pip install command
-        if (bot.buildCommand.includes('pip install') || bot.buildCommand.includes('requirements.txt')) {
-          addDeploymentLog('Skipping pip install commands in Replit environment (packages are pre-installed)');
-        } else {
-          addDeploymentLog('Executing custom build command...');
-          try {
-            await this.runCommandWithLogs(bot.buildCommand, botDir, addDeploymentLog);
-            addDeploymentLog('Build command completed successfully');
-          } catch (error) {
-            addDeploymentLog(`Build command failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-            // Don't fail deployment for build command errors
-          }
+        addDeploymentLog(`Executing build command: ${bot.buildCommand}`);
+        try {
+          await this.runCommandWithLogs(bot.buildCommand, botDir, addDeploymentLog);
+          addDeploymentLog('Build command completed successfully');
+        } catch (error) {
+          addDeploymentLog(`Build command failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          // Don't fail deployment for build command errors
         }
       }
 
@@ -234,7 +224,9 @@ export class BotManager extends EventEmitter {
   }
 
   private async cloneGitHubRepository(repoUrl: string, botName: string, logFunction: (message: string) => void): Promise<string> {
-    const botsDir = path.join(process.cwd(), 'bots');
+    const botsDir = process.env.RENDER 
+      ? path.join('/opt/render/project/src', 'deployed_bots')
+      : path.join(process.cwd(), 'deployed_bots');
     const botDir = path.join(botsDir, botName);
     
     // Ensure bots directory exists
@@ -397,7 +389,7 @@ export class BotManager extends EventEmitter {
           const output = data.toString();
           buildOutput += output;
           // Log key build steps
-          const lines = output.split('\n').filter(line => line.trim());
+          const lines = output.split('\n').filter((line: string) => line.trim());
           lines.forEach((line: string) => {
             if (line.includes('Step ') || line.includes('Successfully built') || line.includes('Successfully tagged')) {
               logFunction(`Docker: ${line.trim()}`);
@@ -495,8 +487,23 @@ export class BotManager extends EventEmitter {
         let enhancedRunCommand = bot.runCommand.replace(/\bpython\b/g, 'python3');
         enhancedRunCommand = enhancedRunCommand.replace(/\bpip\b/g, 'python3 -m pip');
         
-        // Generate a unique port for each bot (starting from 8080)
-        const botPort = 8080 + parseInt(botId.slice(-4), 16) % 1000;
+        // For Render, ensure we use the correct Python interpreter
+        if (process.env.RENDER) {
+          // On Render, python3 should be available in PATH
+          enhancedRunCommand = enhancedRunCommand.replace(/^python3/g, '/opt/render/project/.render/python/bin/python3 || python3');
+        }
+        
+        console.log(`[${bot.name}] Enhanced run command: ${enhancedRunCommand}`);
+        
+        // For Render deployment, use PORT from environment if available, otherwise generate unique port
+        let botPort: number;
+        if (process.env.RENDER && process.env.PORT) {
+          // On Render, use the provided PORT
+          botPort = parseInt(process.env.PORT, 10);
+        } else {
+          // Generate a unique port for each bot (starting from 8080)
+          botPort = 8080 + parseInt(botId.slice(-4), 16) % 1000;
+        }
         
         // Parse stored environment variables
         let botEnvVars: Record<string, string> = {};
@@ -508,6 +515,19 @@ export class BotManager extends EventEmitter {
           }
         }
         
+        // Ensure the bot directory exists and is accessible
+        const fs = await import('fs/promises');
+        try {
+          await fs.access(bot.filePath);
+        } catch (error) {
+          console.error(`Bot directory not accessible: ${bot.filePath}`);
+          throw new Error(`Bot files not found at: ${bot.filePath}`);
+        }
+        
+        console.log(`[${bot.name}] Starting bot from directory: ${bot.filePath}`);
+        console.log(`[${bot.name}] Bot port: ${botPort}`);
+        console.log(`[${bot.name}] Environment variables: ${Object.keys(botEnvVars).join(', ')}`);
+        
         childProcess = spawn('sh', ['-c', enhancedRunCommand], {
           cwd: bot.filePath,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -515,7 +535,13 @@ export class BotManager extends EventEmitter {
             ...process.env,
             ...botEnvVars, // Apply bot-specific environment variables
             PORT: botPort.toString(),
-            BOT_PORT: botPort.toString()
+            BOT_PORT: botPort.toString(),
+            // Add Render-specific environment variables
+            RENDER: process.env.RENDER || 'false',
+            NODE_ENV: process.env.NODE_ENV || 'production',
+            // Python-specific environment variables for Render
+            PYTHONPATH: bot.filePath,
+            PYTHONUNBUFFERED: '1'
           }
         });
       }
@@ -533,16 +559,20 @@ export class BotManager extends EventEmitter {
 
       this.activeProcesses.set(botId, botProcess);
 
-      // Handle process output
+      // Handle process output with better logging
       childProcess.stdout?.on('data', (data) => {
-        const log = `[${new Date().toISOString()}] ${data.toString().trim()}`;
+        const output = data.toString().trim();
+        const log = `[${new Date().toISOString()}] ${output}`;
         botProcess.logs.push(log);
+        console.log(`[${bot.name}] STDOUT: ${output}`);
         this.emitLog(botId, log);
       });
 
       childProcess.stderr?.on('data', (data) => {
-        const log = `[${new Date().toISOString()}] ERROR: ${data.toString().trim()}`;
+        const output = data.toString().trim();
+        const log = `[${new Date().toISOString()}] ERROR: ${output}`;
         botProcess.logs.push(log);
+        console.error(`[${bot.name}] STDERR: ${output}`);
         this.emitLog(botId, log);
       });
 
@@ -583,131 +613,140 @@ export class BotManager extends EventEmitter {
 
     // Use SIGKILL for immediate stop, SIGTERM for graceful stop
     const signal = immediate ? 'SIGKILL' : 'SIGTERM';
-    botProcess.process.kill(signal);
     
-    // Wait for process to actually terminate if using SIGTERM
-    if (!immediate) {
-      await new Promise(resolve => {
-        const timeout = setTimeout(() => {
-          // Force kill if process doesn't respond to SIGTERM within 3 seconds
-          if (!botProcess.process.killed) {
-            botProcess.process.kill('SIGKILL');
-          }
-          resolve(undefined);
-        }, 3000);
-        
-        botProcess.process.on('exit', () => {
-          clearTimeout(timeout);
-          resolve(undefined);
-        });
+    if (botProcess.isDockerContainer && botProcess.containerName) {
+      // Stop Docker container
+      const stopProcess = spawn('docker', ['stop', botProcess.containerName], {
+        stdio: 'pipe'
       });
+      
+      stopProcess.on('exit', () => {
+        console.log(`[${botProcess.bot.name}] Docker container stopped: ${botProcess.containerName}`);
+      });
+    } else {
+      // Stop regular process
+      botProcess.process.kill(signal);
     }
     
+    // Clean up
     this.activeProcesses.delete(botId);
     await storage.updateBot(botId, { status: 'stopped', processId: null });
     this.emit('botStatusChanged', { botId, status: 'stopped' });
   }
 
   async restartBot(botId: string): Promise<void> {
-    if (this.activeProcesses.has(botId)) {
-      await this.stopBot(botId, true); // Force immediate stop on restart
-      // Wait a bit before restarting
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-    await this.startBot(botId);
-  }
-
-  // Enhanced bot management methods
-  async forceStopBot(botId: string): Promise<void> {
-    const botProcess = this.activeProcesses.get(botId);
-    if (!botProcess) throw new Error('Bot is not running');
-
     try {
-      // Force kill immediately with SIGKILL
-      botProcess.process.kill('SIGKILL');
-      
-      // Immediately cleanup without waiting
-      this.activeProcesses.delete(botId);
-      await storage.updateBot(botId, { status: 'stopped', processId: null });
-      this.emit('botStatusChanged', { botId, status: 'stopped' });
-      
-      console.log(`Bot ${botId} force stopped immediately with SIGKILL`);
+      await this.stopBot(botId, true); // Force stop
+      setTimeout(async () => {
+        await this.startBot(botId);
+      }, 2000); // Wait 2 seconds before restart
     } catch (error) {
-      console.error(`Failed to force stop bot ${botId}:`, error);
-      throw error;
-    }
-  }
-
-  async getSystemStats(): Promise<{memoryUsage: NodeJS.MemoryUsage, uptime: number}> {
-    return {
-      memoryUsage: process.memoryUsage(),
-      uptime: process.uptime()
-    };
-  }
-
-  async performHealthCheck(botId: string): Promise<'healthy' | 'unhealthy' | 'unknown'> {
-    const botProcess = this.activeProcesses.get(botId);
-    if (!botProcess) return 'unknown';
-    
-    // Check if process is still alive and responsive
-    try {
-      const isAlive = !botProcess.process.killed && botProcess.process.pid;
-      botProcess.lastHealthCheck = new Date();
-      botProcess.healthStatus = isAlive ? 'healthy' : 'unhealthy';
-      return botProcess.healthStatus;
-    } catch (error) {
-      botProcess.healthStatus = 'unhealthy';
-      return 'unhealthy';
+      // If bot is not running, just start it
+      await this.startBot(botId);
     }
   }
 
   async deleteBot(botId: string): Promise<void> {
-    const bot = await storage.getBot(botId);
-    if (!bot) throw new Error('Bot not found');
+    try {
+      // Stop bot if running
+      if (this.activeProcesses.has(botId)) {
+        await this.stopBot(botId, true);
+      }
 
-    // Stop bot if running
-    if (this.activeProcesses.has(botId)) {
-      await this.stopBot(botId);
+      // Delete bot files
+      const bot = await storage.getBot(botId);
+      if (bot && bot.filePath) {
+        // Check if it's a Docker image or file path
+        if (bot.deploymentSource === 'docker' && bot.filePath.includes('host-elite-bot-')) {
+          // Remove Docker image
+          const removeImageProcess = spawn('docker', ['rmi', bot.filePath], {
+            stdio: 'pipe'
+          });
+          
+          removeImageProcess.on('exit', (code) => {
+            if (code === 0) {
+              console.log(`[${bot.name}] Docker image removed: ${bot.filePath}`);
+            } else {
+              console.warn(`[${bot.name}] Failed to remove Docker image: ${bot.filePath}`);
+            }
+          });
+        } else {
+          // Delete bot files
+          await fileManager.deleteBotFiles(bot.name);
+        }
+      }
+
+      // Clean up logs
+      this.deploymentLogs.delete(botId);
+      this.logListeners.delete(botId);
+
+    } catch (error) {
+      console.error(`Error deleting bot ${botId}:`, error);
+      throw error;
     }
-
-    // Delete files
-    await fileManager.deleteBotFiles(bot.name);
-
-    // Remove from storage
-    await storage.deleteBot(botId);
   }
 
   getBotLogs(botId: string): string[] {
     const botProcess = this.activeProcesses.get(botId);
     const deploymentLogs = this.deploymentLogs.get(botId) || [];
-    const runtimeLogs = botProcess?.logs || [];
+    const runtimeLogs = botProcess ? botProcess.logs : [];
     return [...deploymentLogs, ...runtimeLogs];
   }
 
-  addLogListener(botId: string, callback: (log: string) => void): void {
+  getBotStatus(botId: string): 'running' | 'stopped' | 'error' | 'deploying' | null {
+    if (this.activeProcesses.has(botId)) {
+      return 'running';
+    }
+    return null; // Will be fetched from storage
+  }
+
+  getActiveBots(): string[] {
+    return Array.from(this.activeProcesses.keys());
+  }
+
+  emitLog(botId: string, log: string): void {
+    this.emit('botLog', { botId, log });
+    
+    // Also emit to specific listeners
+    const listeners = this.logListeners.get(botId);
+    if (listeners) {
+      listeners.forEach(listener => listener(log));
+    }
+  }
+
+  addLogListener(botId: string, listener: (log: string) => void): void {
     if (!this.logListeners.has(botId)) {
       this.logListeners.set(botId, new Set());
     }
-    this.logListeners.get(botId)!.add(callback);
+    this.logListeners.get(botId)!.add(listener);
   }
 
-  removeLogListener(botId: string, callback: (log: string) => void): void {
-    this.logListeners.get(botId)?.delete(callback);
-  }
-
-  private emitLog(botId: string, log: string): void {
+  removeLogListener(botId: string, listener: (log: string) => void): void {
     const listeners = this.logListeners.get(botId);
     if (listeners) {
-      listeners.forEach(callback => callback(log));
+      listeners.delete(listener);
+      if (listeners.size === 0) {
+        this.logListeners.delete(botId);
+      }
     }
-    this.emit('botLog', { botId, log });
   }
 
-  private async runCommand(command: string, cwd: string): Promise<void> {
+  private async runCommandWithLogs(command: string, cwd: string, logFunction: (message: string) => void): Promise<void> {
     return new Promise((resolve, reject) => {
-      const childProcess = spawn('sh', ['-c', command], { cwd });
-      
-      childProcess.on('exit', (code) => {
+      const process = spawn('sh', ['-c', command], {
+        cwd,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      process.stdout?.on('data', (data) => {
+        logFunction(`BUILD: ${data.toString().trim()}`);
+      });
+
+      process.stderr?.on('data', (data) => {
+        logFunction(`BUILD ERROR: ${data.toString().trim()}`);
+      });
+
+      process.on('exit', (code) => {
         if (code === 0) {
           resolve();
         } else {
@@ -715,46 +754,7 @@ export class BotManager extends EventEmitter {
         }
       });
 
-      childProcess.on('error', reject);
-    });
-  }
-
-  private async runCommandWithLogs(command: string, cwd: string, logCallback: (message: string) => void): Promise<void> {
-    return new Promise((resolve, reject) => {
-      // Replace pip with python3 -m pip for Python installations  
-      let enhancedCommand = command.replace(/\bpython\b/g, 'python3');
-      enhancedCommand = enhancedCommand.replace(/\bpip\b/g, 'python3 -m pip');
-      
-      const childProcess = spawn('sh', ['-c', enhancedCommand], { 
-        cwd, 
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: process.env
-      });
-      
-      childProcess.stdout?.on('data', (data) => {
-        const output = data.toString().trim();
-        if (output) {
-          logCallback(`STDOUT: ${output}`);
-        }
-      });
-
-      childProcess.stderr?.on('data', (data) => {
-        const output = data.toString().trim();
-        if (output) {
-          logCallback(`STDERR: ${output}`);
-        }
-      });
-      
-      childProcess.on('exit', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Command failed with exit code ${code}`));
-        }
-      });
-
-      childProcess.on('error', (error) => {
-        logCallback(`PROCESS ERROR: ${error.message}`);
+      process.on('error', (error) => {
         reject(error);
       });
     });
