@@ -1,11 +1,19 @@
 services:
   - type: web
-    name: bot-hosting-platform
+    name: host-elite-bot-platform
     env: node
     plan: free
-    region: oregon
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
+      - key: RENDER
+        value: true
+      - key: PORT
+        generateValue: true
+    healthCheckPath: /
+    disk:
+      name: host-elite-disk
+      mountPath: /opt/render/project/src/deployed_bots
+      sizeGB: 1
