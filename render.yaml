@@ -2,21 +2,30 @@ services:
   - type: web
     name: host-elite-bot-platform
     env: node
-    plan: starter
-    buildCommand: npm ci && npm run build
+    plan: free
+    buildCommand: npm ci --production=false && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
+      - key: RENDER
+        value: true
       - key: PORT
-        value: 10000
-    autoDeploy: true
+        generateValue: true
     healthCheckPath: /
+    autoDeploy: true
     numInstances: 1
     region: oregon
     scaling:
       minInstances: 1
       maxInstances: 1
+    buildFilter:
+      paths:
+        - "**"
+      ignoredPaths:
+        - "node_modules/**"
+        - ".git/**"
+        - "*.log"
     disk:
       name: host-elite-storage
       mountPath: /opt/render/project/src/deployed_bots
