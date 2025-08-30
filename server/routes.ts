@@ -1,5 +1,3 @@
-// Add these health check endpoints after line 127 in your routes.ts file
-
 // Health check endpoints for Render deployment
 app.get('/api/health', async (req, res) => {
   try {
@@ -19,6 +17,7 @@ app.get('/api/health', async (req, res) => {
       },
       environment: {
         node_env: process.env.NODE_ENV || 'development',
+        node_version: process.version,
         port: process.env.PORT || '5000',
         platform: 'render'
       }
@@ -49,37 +48,6 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-app.get('/api/status', async (req, res) => {
-  try {
-    const allBots = await storage.getAllBots();
-    const stats = {
-      platform: 'Host-Elite',
-      status: 'running',
-      version: '1.0.0',
-      uptime_seconds: Math.floor(process.uptime()),
-      bots: {
-        total: allBots.length,
-        running: allBots.filter(bot => bot.status === 'running').length,
-        stopped: allBots.filter(bot => bot.status === 'stopped').length,
-        error: allBots.filter(bot => bot.status === 'error').length
-      },
-      services: {
-        websocket: 'active',
-        telegram_bot: process.env.TELEGRAM_BOT_TOKEN ? 'enabled' : 'disabled',
-        file_manager: 'active'
-      },
-      timestamp: new Date().toISOString()
-    };
-    res.json(stats);
-  } catch (error) {
-    res.status(500).json({
-      platform: 'Host-Elite',
-      status: 'error',
-      error: error instanceof Error ? error.message : 'Status check failed'
-    });
-  }
-});
-
 app.get('/api/ping', (req, res) => {
   res.json({
     pong: true,
@@ -89,36 +57,12 @@ app.get('/api/ping', (req, res) => {
   });
 });
 
-app.get('/api/keepalive', (req, res) => {
+app.get('/api/ready', (req, res) => {
   res.json({
-    alive: true,
+    status: 'ready',
     service: 'host-elite-platform',
-    status: 'running',
-    memory_mb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
     timestamp: new Date().toISOString()
   });
-});
-
-// Ready check for container orchestration
-app.get('/api/ready', (req, res) => {
-  // Check if the platform is ready to serve requests
-  try {
-    res.json({
-      status: 'ready',
-      service: 'host-elite-platform',
-      checks: {
-        storage: 'ok',
-        bot_manager: 'ok',
-        websocket: 'ok'
-      },
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(503).json({
-      status: 'not_ready',
-      error: error instanceof Error ? error.message : 'Readiness check failed'
-    });
-  }
 });
 
 // Helper function to format uptime
@@ -133,5 +77,3 @@ function formatUptime(seconds: number): string {
   if (minutes > 0) return `${minutes}m ${secs}s`;
   return `${secs}s`;
 }
-
-// Continue with existing API routes...
