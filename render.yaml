@@ -1,14 +1,20 @@
 services:
   - type: web
-    name: bot-hosting-platform
+    name: host-elite-bot-platform
     env: node
     plan: free
     region: oregon
-    buildCommand: npm ci && npm run build
-    startCommand: npm start
+    buildCommand: npm ci --only=production && npm install vite@latest esbuild@latest --save-dev && npx vite build --config vite.config.ts && npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist
+    startCommand: NODE_ENV=production node dist/index.js
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 10000
+        generateValue: true
+      - key: RENDER
+        value: true
     healthCheckPath: /api/health
+    disk:
+      name: host-elite-disk
+      mountPath: /tmp
+      sizeGB: 1
