@@ -4,8 +4,8 @@ services:
     env: node
     plan: free
     region: oregon
-    buildCommand: npm ci --only=production && npm install vite@latest esbuild@latest --save-dev && npx vite build --config vite.config.ts && npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist
-    startCommand: NODE_ENV=production node dist/index.js
+    buildCommand: npm install && npm run build:render
+    startCommand: npm run start:render
     envVars:
       - key: NODE_ENV
         value: production
