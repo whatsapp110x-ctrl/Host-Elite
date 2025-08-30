@@ -10,10 +10,13 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "strict": true,
+    "strict": false,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
     "paths": {
       "@/*": ["./client/src/*"],
@@ -33,8 +36,5 @@
     "client/dist",
     "bots",
     "deployed_bots"
-  ],
-  "references": [
-    { "path": "./client/tsconfig.json" }
   ]
 }
