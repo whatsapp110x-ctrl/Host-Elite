@@ -1,11 +1,11 @@
 services:
   - type: web
     name: host-elite-platform
-    env: node
+    env: docker
     plan: free
     region: oregon
-    buildCommand: npm ci --legacy-peer-deps && npm run build
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
+    dockerContext: ./
     envVars:
       - key: NODE_ENV
         value: production
@@ -13,10 +13,6 @@ services:
         generateValue: true
       - key: RENDER
         value: true
-      - key: NPM_CONFIG_PRODUCTION
-        value: false
-      - key: NODE_OPTIONS
-        value: --max-old-space-size=1024
     healthCheckPath: /api/health
     disk:
       name: host-elite-disk
