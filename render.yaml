@@ -13,6 +13,8 @@ services:
         generateValue: true
       - key: RENDER
         value: true
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=2048
     healthCheckPath: /api/health
     disk:
       name: host-elite-disk
