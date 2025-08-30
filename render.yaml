@@ -1,11 +1,11 @@
 services:
   - type: web
     name: host-elite-bot-platform
-    env: node
+    env: docker
     plan: free
     region: oregon
-    buildCommand: npm ci && npm run build
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
+    dockerContext: ./
     envVars:
       - key: NODE_ENV
         value: production
@@ -13,8 +13,6 @@ services:
         generateValue: true
       - key: RENDER
         value: true
-      - key: DATABASE_URL
-        generateValue: true
     healthCheckPath: /api/health
     disk:
       name: host-elite-disk
