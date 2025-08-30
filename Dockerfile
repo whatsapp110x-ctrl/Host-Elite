@@ -1,5 +1,5 @@
-# Use Node.js 18 LTS
-FROM node:18-alpine AS builder
+# Use Node.js 20 LTS
+FROM node:20-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -33,7 +33,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM node:18-alpine AS production
+FROM node:20-alpine AS production
 
 # Install curl for health checks
 RUN apk add --no-cache curl
