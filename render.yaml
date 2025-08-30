@@ -4,8 +4,8 @@ services:
     env: node
     plan: free
     region: oregon
-    buildCommand: npm install && npm run build:render
-    startCommand: npm run start:render
+    buildCommand: npm install --production=false && npx esbuild server/index.ts --platform=node --packages=external --bundle --format=cjs --outdir=dist
+    startCommand: NODE_ENV=production node dist/index.js
     envVars:
       - key: NODE_ENV
         value: production
