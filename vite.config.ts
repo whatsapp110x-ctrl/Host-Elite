@@ -15,18 +15,16 @@ export default defineConfig({
     outDir: "./client/dist",
     emptyOutDir: true,
     sourcemap: false,
-    minify: 'esbuild',
-    target: 'esnext',
+    minify: true,
+    target: 'es2020',
     rollupOptions: {
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom'],
           ui: ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu'],
-          utils: ['clsx', 'tailwind-merge', 'class-variance-authority'],
         },
       },
     },
-    chunkSizeWarningLimit: 1000,
   },
   server: {
     proxy: {
@@ -36,8 +34,5 @@ export default defineConfig({
         ws: true,
       },
     },
-  },
-  define: {
-    'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
   },
 });
