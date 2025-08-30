@@ -4,8 +4,8 @@ services:
     env: node
     plan: free
     region: oregon
-    buildCommand: npm install --production=false
-    startCommand: node server/production.js
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
@@ -13,6 +13,8 @@ services:
         generateValue: true
       - key: RENDER
         value: true
+      - key: DATABASE_URL
+        generateValue: true
     healthCheckPath: /api/health
     disk:
       name: host-elite-disk
