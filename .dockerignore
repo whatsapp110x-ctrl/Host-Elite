@@ -1,25 +1,102 @@
-node_modules
+# Node modules
+node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.npm
-.git
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.production
+.env.test.local
+.env.development.local
+.env.production.local
+
+# Build outputs (will be generated during build)
+dist/
+build/
+.vite/
+
+# Cache directories
+.cache/
+.npm/
+.yarn/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git/
 .gitignore
-README.md
-.env*
-.nyc_output
-coverage
-.vscode
-.idea
+
+# Documentation and markdown files
+*.md
+README*
+CHANGELOG*
+LICENSE*
+
+# Test files
+*.test.*
+*.spec.*
+__tests__/
+coverage/
+.nyc_output/
+
+# Development configs
+.eslintrc*
+.prettierrc*
+.editorconfig
+
+# Logs
+logs/
 *.log
-dist
-bots/*
-deployed_bots/*
-temp/*
-uploads/*
-.replit*
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Temporary files
+tmp/
+temp/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Replit specific
+.replit
 replit.nix
-Dockerfile*
-docker-compose*
-.dockerignore
-package-lock.json
+.replit.toml
+
+# Database
+*.sqlite
+*.db
+
+# Bot deployment working directories (these will be created at runtime)
+bots/*/
+deployed_bots/*/
+*.session
+
+# Keep templates but ignore attached assets for build optimization
+attached_assets/
+
+# Development tools
+.husky/
