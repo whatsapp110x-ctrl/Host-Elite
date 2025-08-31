@@ -26,8 +26,16 @@ COPY .npmrc ./
 RUN npm cache clean --force
 RUN npm install --legacy-peer-deps --verbose
 
-# Copy source code
+# Copy all source code
 COPY . .
+
+# Create client directory structure if missing
+RUN mkdir -p client/src client/dist
+
+# Ensure index.html exists in client directory
+RUN if [ ! -f client/index.html ]; then \
+    echo '<!doctype html><html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Host-Elite Platform</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>' > client/index.html; \
+    fi
 
 # Build the application
 RUN npm run build
