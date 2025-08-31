@@ -24,21 +24,27 @@ COPY .npmrc ./
 
 # Clear npm cache and install dependencies
 RUN npm cache clean --force
-RUN npm install --legacy-peer-deps --verbose
+RUN npm install --legacy-peer-deps --silent
+
+# Copy configuration files
+COPY tailwind.config.js ./
+COPY postcss.config.js ./
+COPY tsconfig.json ./
+COPY vite.config.ts ./
 
 # Copy all source code
 COPY . .
 
 # Create client directory structure if missing
-RUN mkdir -p client/src client/dist
+RUN mkdir -p client/src client/dist client/public
 
 # Ensure index.html exists in client directory
 RUN if [ ! -f client/index.html ]; then \
     echo '<!doctype html><html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Host-Elite Platform</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>' > client/index.html; \
     fi
 
-# Build the application
-RUN npm run build
+# Build the application with better error handling
+RUN npm run build || (echo "Build failed, checking errors:" && ls -la && exit 1)
 
 # Production stage
 FROM node:20-alpine AS production
