@@ -54,9 +54,9 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy built application from builder stage
 COPY --from=builder --chown=hostapp:nodejs /app/dist ./dist
 
-# Copy necessary runtime files
-COPY --chown=hostapp:nodejs shared ./shared
-COPY --chown=hostapp:nodejs templates ./templates
+# Copy necessary runtime files from builder stage
+COPY --from=builder --chown=hostapp:nodejs /app/shared ./shared
+COPY --from=builder --chown=hostapp:nodejs /app/templates ./templates
 
 # Create directories for bot files with proper permissions
 RUN mkdir -p bots deployed_bots logs && \
