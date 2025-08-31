@@ -16,15 +16,22 @@ export default defineConfig({
     outDir: "../client/dist",
     emptyOutDir: true,
     sourcemap: false,
-    minify: true,
+    minify: 'esbuild',
     target: 'es2020',
     rollupOptions: {
+      external: [],
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          ui: ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu'],
-        },
+        manualChunks: undefined,
       },
+    },
+    chunkSizeWarningLimit: 2000,
+  },
+  css: {
+    postcss: {
+      plugins: [
+        require('tailwindcss'),
+        require('autoprefixer'),
+      ],
     },
   },
   server: {
