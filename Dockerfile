@@ -24,8 +24,10 @@ COPY . .
 # Build stage - Build the frontend
 FROM base AS builder
 
-# Set environment for production build
+# Set environment variables for production build
 ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV VITE_NODE_ENV=production
 
 # Build the application (frontend + backend)
 RUN npm run build
@@ -46,6 +48,10 @@ WORKDIR /app
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S hostapp -u 1001 -G nodejs
+
+# Set production environment variables
+ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=512"
 
 # Copy package files and install only production dependencies
 COPY package*.json ./
