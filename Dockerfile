@@ -32,9 +32,10 @@ RUN mkdir -p bots deployed_bots logs dist && \
 # Switch to non-root user
 USER hostapp
 
-# Set environment variables
+# Set environment variables for production
 ENV NODE_ENV=production
 ENV NODE_OPTIONS="--max-old-space-size=512"
+ENV HOST=0.0.0.0
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
@@ -43,5 +44,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 # Expose port (Render will set PORT environment variable)
 EXPOSE ${PORT:-5000}
 
-# Start the application in development mode (which works better in Docker)
-CMD ["npm", "run", "dev"]
+# Start the application using npx tsx directly
+CMD ["npx", "tsx", "server/index.ts"]
