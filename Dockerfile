@@ -16,7 +16,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies including dev dependencies for build
-RUN npm ci
+RUN npm install
 
 # Copy source code and config files
 COPY . .
@@ -49,7 +49,7 @@ RUN addgroup -g 1001 -S nodejs && \
 
 # Copy package files and install only production dependencies
 COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
+RUN npm install --only=production && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder --chown=hostapp:nodejs /app/dist ./dist
