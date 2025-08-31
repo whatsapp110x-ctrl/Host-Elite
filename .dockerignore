@@ -13,7 +13,6 @@ coverage
 .idea
 *.log
 dist
-client/dist
 bots/*
 deployed_bots/*
 temp/*
@@ -23,3 +22,4 @@ replit.nix
 Dockerfile*
 docker-compose*
 .dockerignore
+package-lock.json
