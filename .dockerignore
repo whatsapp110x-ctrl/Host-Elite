@@ -95,8 +95,10 @@ bots/*/
 deployed_bots/*/
 *.session
 
-# Keep templates but ignore attached assets for build optimization
+# Ignore attached assets for build optimization
 attached_assets/
 
 # Development tools
 .husky/
+
+# NOTE: templates/ directory is intentionally NOT excluded as it's needed for runtime
